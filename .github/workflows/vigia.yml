@@ -1,0 +1,51 @@
+name: vigia
+
+# Vigia de fora: a cada 10 minutos lê o endereço público de saúde (segredo VIGIA_TOKEN no nome do arquivo) e FALHA quando o endereço não
+# responde, o WhatsApp está desligado, o relógio não bate há mais de 25 minutos ou o canário do dia falhou. O GitHub manda e-mail de execução
+# que falha; só falha na virada de bom para ruim (vigia.sh guarda "bom" ou "ruim" no cache entre as execuções).
+# Repositório público de propósito: Actions é grátis. Atenção: o GitHub desliga agendamentos de repositório público sem atividade por 60 dias
+# (Actions > vigia > Enable workflow, ou qualquer commit).
+# Segredo: gh secret set VIGIA_TOKEN. Parar: gh workflow disable vigia.yml
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: vigia
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  vigia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      # O "bom ou ruim" da execução anterior. A chave muda a cada execução; a restauração pega a mais recente.
+      - uses: actions/cache/restore@v4
+        with:
+          path: vigia-estado.txt
+          key: vigia-estado-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: vigia-estado-
+      - name: Ler a saúde
+        id: vigia
+        continue-on-error: true
+        env:
+          VIGIA_URL: https://app.winz.com.br/saude/${{ secrets.VIGIA_TOKEN }}.json
+          VIGIA_ESTADO: vigia-estado.txt
+        run: bash vigia.sh
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: vigia-estado.txt
+          key: vigia-estado-${{ github.run_id }}-${{ github.run_attempt }}
+      # A leitura acima não derruba a execução sozinha: guardar a memória vem antes, e só então a execução falha (e o e-mail sai).
+      - name: Falhar na virada
+        if: steps.vigia.outcome == 'failure'
+        run: |
+          echo "O vigia de fora viu o Winz fora do normal (detalhes na etapa anterior)."
+          exit 1
